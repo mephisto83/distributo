@@ -1,7 +1,15 @@
 {
   "name": "distributo",
+  "type": "module",
   "main": "dist/index.js",
+  "module": "dist/index.js",
   "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
+    }
+  },
   "scripts": {
     "prepare": "npm run build",
     "prebuild": "npm version patch --no-git-tag-version",
@@ -29,5 +37,5 @@
     "socket.io-client": "^4.8.1",
     "winston": "^3.17.0"
   },
-  "version": "0.1.0"
+  "version": "0.2.0"
 }
