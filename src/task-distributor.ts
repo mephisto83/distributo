@@ -22,14 +22,14 @@ export default class TaskDistributor<T> {
     private serviceType: string;
     private batchSize: number;
     private getTasks: () => T[];
-    private handleResults: (results: T[]) => void;
+    protected handleResults: (results: T[]) => void;
     private enableBonjour: boolean;
 
-    private logger: winston.Logger;
-    private app: Express;
-    private server: HTTPServer;
-    private io: SocketIOServer;
-    private tasks: T[];
+    protected logger: winston.Logger;
+    protected app: Express;
+    protected server: HTTPServer;
+    protected io: SocketIOServer;
+    protected tasks: T[];
 
     private bonjourInstance: Bonjour | null = null;
     private servicePublished: Service | null = null;
@@ -68,7 +68,7 @@ export default class TaskDistributor<T> {
         // Additional routes can be defined here
     }
 
-    private setupSockets(): void {
+    protected setupSockets(): void {
         this.io.on('connection', (socket: Socket) => {
             this.logger.info(`Worker connected: ${socket.id}`);
 
@@ -134,6 +134,24 @@ export default class TaskDistributor<T> {
         this.server.close(() => {
             this.logger.info('Server closed.');
         });
+    }
+
+    /**
+     * Adds a new task to the task queue.
+     * @param task - The task to add.
+     */
+    public addTask(task: T): void {
+        this.tasks.push(task);
+        this.logger.info(`Added new task. Total tasks: ${this.tasks.length}`);
+    }
+
+    /**
+     * Adds multiple tasks to the task queue.
+     * @param tasks - Array of tasks to add.
+     */
+    public addTasks(tasks: T[]): void {
+        this.tasks.push(...tasks);
+        this.logger.info(`Added ${tasks.length} new tasks. Total tasks: ${this.tasks.length}`);
     }
 }
 
