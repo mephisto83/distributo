@@ -5,10 +5,8 @@
   "module": "dist/index.js",
   "types": "dist/index.d.ts",
   "exports": {
-    ".": {
-      "import": "./dist/index.js",
-      "require": "./dist/index.cjs"
-    }
+    ".": "./dist/index.js",
+    "./*": "./dist/*.js"
   },
   "scripts": {
     "prepare": "npm run build",
@@ -37,5 +35,5 @@
     "socket.io-client": "^4.8.1",
     "winston": "^3.17.0"
   },
-  "version": "0.2.0"
+  "version": "0.3.0"
 }

@@ -17,7 +17,7 @@ export interface TaskDistributorOptions<T> {
     enableBonjour?: boolean;
 }
 
-export class TaskDistributor<T> {
+export default class TaskDistributor<T> {
     private port: number;
     private serviceType: string;
     private batchSize: number;

@@ -26,7 +26,7 @@ function createDefaultLogger(): winston.Logger {
     });
 }
 
-export class WorkerClient<TaskType = unknown, ResultType = unknown> {
+export default class WorkerClient<TaskType = unknown, ResultType = unknown> {
     private serviceType: string;
     private masterUrl?: string;
     private processTasksFn: (tasks: TaskType[]) => Promise<ResultType[]>;
