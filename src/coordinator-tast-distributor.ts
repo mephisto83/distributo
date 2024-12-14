@@ -2,7 +2,7 @@
 
 import express, { Request, Response } from 'express';
 import TaskDistributor from './task-distributor.js'; // Adjust the import path as necessary
-import { DynamicTask } from './interface.js';
+import { DynamicTask, TaskResult } from './interface.js';
 import { generateDynamicTask } from './generateDynamicTask.js'; // Adjust the import path
 import path from 'path';
 import winston from 'winston';
@@ -18,6 +18,8 @@ interface CoordinatorOptions {
     discoveryTimeoutMs?: number;
     enableBonjour?: boolean;
     logger?: winston.Logger;
+    onResult?: (arg: any) => void;
+    taskGenerator?: () => Promise<DynamicTask[]>;
 }
 
 interface WorkerInfo {
@@ -32,21 +34,19 @@ interface TaskStatus {
     status: 'pending' | 'installed' | 'failed' | 'completed';
 }
 
-interface SetupInstruction {
-    taskType: string;
-    task: DynamicTask;
-}
-
 export class CoordinatorTaskDistributor extends TaskDistributor<DynamicTask> {
     private httpServer: import('http').Server;
     private httpPort: number;
     private taskFolderPath: string;
+    private taskGenerator?: () => Promise<DynamicTask[]>;
 
+    private promiseTrain: Promise<void>;
     // Mapping of worker socket IDs to their capabilities and status
     private workers: Map<string, WorkerInfo> = new Map();
     // Tracking task statuses
     private taskStatuses: Map<string, TaskStatus> = new Map();
-
+    private taskStatusHandled: Map<string, boolean> = new Map();
+    private onResult: (arg: any) => void;
     constructor(options: CoordinatorOptions) {
         const {
             httpPort = 5000,
@@ -68,12 +68,15 @@ export class CoordinatorTaskDistributor extends TaskDistributor<DynamicTask> {
             enableBonjour,
         });
 
+        this.promiseTrain = Promise.resolve();
+        this.taskGenerator = options.taskGenerator;
+
         // Initialize Express app for receiving task messages
         this.app = express();
         this.app.use(express.json());
         this.httpPort = httpPort;
         this.taskFolderPath = path.resolve(taskFolderPath);
-
+        this.onResult = options.onResult || ((a: any) => { });
         // Initialize logger
         this.logger = logger ?? winston.createLogger({
             level: 'info',
@@ -94,8 +97,54 @@ export class CoordinatorTaskDistributor extends TaskDistributor<DynamicTask> {
         this.httpServer = this.app.listen(this.httpPort, () => {
             this.logger.info(`Coordinator HTTP server running on port ${this.httpPort}`);
         });
+        this.setupOnConnected();
     }
+    protected async gooseTasks() {
+        console.log('Goose the task list')
+        if (this.taskGenerator) {
+            console.log('getting new tasks')
+            let newTasks = await this.taskGenerator();
+            if (newTasks?.length) {
+                this.tasks.push(...newTasks);
+                for (let dynamicTask of newTasks) {
+                    // Initialize task status with dynamicTask instead of undefined task
+                    this.taskStatuses.set(dynamicTask.taskId || '', {
+                        task: dynamicTask,
+                        assignedTo: '',
+                        status: 'pending',
+                    });
+                }
+            }
+        }
+        else {
+            console.log('No task generator')
+        }
+    }
+    async appendTask(projectName: string, taskType: string, options: {
+        type?: string;
+        args?: string[];
+        env?: Record<string, string>;
+        workingDirectory?: string;
+        taskId?: string;
+        timeout?: number;
+        additionalOptions?: Record<string, any>;
+    }) {
+        // Define the path to the project folder
+        const projectPath = path.join(this.taskFolderPath, projectName);
 
+        // Generate the DynamicTask
+        const dynamicTask: DynamicTask = await generateDynamicTask(projectPath, taskType, options);
+
+        // Add the task to the distributor
+        this.addTask(dynamicTask);
+
+        // Initialize task status with dynamicTask instead of undefined task
+        this.taskStatuses.set(dynamicTask.taskId || '', {
+            task: dynamicTask,
+            assignedTo: '',
+            status: 'pending',
+        });
+    }
     /**
      * Sets up HTTP routes to receive task messages.
      */
@@ -219,14 +268,9 @@ export class CoordinatorTaskDistributor extends TaskDistributor<DynamicTask> {
             return res.status(200).json({ addedTasks, failedTasks });
         }));
     }
-    /**
-     * Sets up Socket.IO event handlers to manage worker capabilities and task assignments.
-     */
-    protected setupSockets(): void {
-        super.setupSockets();
-        this.io.on('connection', (socket: Socket) => {
-            this.logger.info(`Worker connected: ${socket.id}`);
 
+    protected setupOnConnected() {
+        this.onConnected = (socket: Socket) => {
             // Initialize worker info
             this.workers.set(socket.id, {
                 socketId: socket.id,
@@ -271,35 +315,40 @@ export class CoordinatorTaskDistributor extends TaskDistributor<DynamicTask> {
              * Event: requestTask
              * Description: Workers request a task. Coordinator assigns a suitable task based on worker's capabilities.
              */
-            socket.on('requestTask', () => {
-                const worker = this.workers.get(socket.id);
-                if (!worker || !worker.isReady || worker.taskTypes.length === 0) {
-                    this.logger.warn(`Worker ${socket.id} is not ready or has no capabilities.`);
-                    socket.emit('noTask', { message: 'Worker not ready or has no capabilities.' });
-                    return;
-                }
+            socket.on('requestTask', async () => {
+                this.promiseTrain = this.promiseTrain.then(async () => {
+                    const worker = this.workers.get(socket.id);
+                    if (!worker || !worker.isReady || worker.taskTypes.length === 0) {
+                        this.logger.warn(`Worker ${socket.id} is not ready or has no capabilities.`);
+                        socket.emit('noTask', { message: 'Worker not ready or has no capabilities.' });
+                        return;
+                    }
+                    if (!this.tasks?.length)
+                        await this.gooseTasks();
+                    // Find a task that matches one of the worker's taskTypes and is pending
+                    const suitableTaskIndex = this.tasks.findIndex(task => worker.taskTypes.includes(task.taskType) && this.taskStatuses.get(task.taskId || '')?.status === 'pending');
 
-                // Find a task that matches one of the worker's taskTypes and is pending
-                const suitableTaskIndex = this.tasks.findIndex(task => worker.taskTypes.includes(task.taskType) && this.taskStatuses.get(task.taskId || '')?.status === 'pending');
+                    if (suitableTaskIndex === -1) {
+                        this.logger.info(`No suitable tasks available for worker ${socket.id}.`);
+                        socket.emit('noTask', { message: 'No suitable tasks available.' });
+                        return;
+                    }
 
-                if (suitableTaskIndex === -1) {
-                    this.logger.info(`No suitable tasks available for worker ${socket.id}.`);
-                    socket.emit('noTask', { message: 'No suitable tasks available.' });
-                    return;
-                }
+                    // Assign the task to the worker
+                    const task = this.tasks.splice(suitableTaskIndex, 1)[0];
+                    socket.emit('assignTask', { task });
 
-                // Assign the task to the worker
-                const task = this.tasks.splice(suitableTaskIndex, 1)[0];
-                socket.emit('assignTask', { task });
+                    // Update task status
+                    this.taskStatuses.set(task.taskId || '', {
+                        task,
+                        assignedTo: socket.id,
+                        status: 'installed', // Assume installation is handled by the Worker
+                    });
 
-                // Update task status
-                this.taskStatuses.set(task.taskId || '', {
-                    task,
-                    assignedTo: socket.id,
-                    status: 'installed', // Assume installation is handled by the Worker
+                    this.logger.info(`Assigned task ${task.taskId} of type ${task.taskType} to worker ${socket.id}.`);
                 });
 
-                this.logger.info(`Assigned task ${task.taskId} of type ${task.taskType} to worker ${socket.id}.`);
+                await this.promiseTrain;
             });
 
             /**
@@ -307,7 +356,7 @@ export class CoordinatorTaskDistributor extends TaskDistributor<DynamicTask> {
              * Payload: { taskId: string, result: any }
              * Description: Workers send this event upon completing a task.
              */
-            socket.on('taskCompleted', (data: { taskId: string; result: any }) => {
+            socket.on('taskCompleted', (data: TaskResult) => {
                 this.logger.info(`Worker ${socket.id} completed task ${data.taskId}.`);
 
                 const taskStatus = this.taskStatuses.get(data.taskId);
@@ -316,7 +365,7 @@ export class CoordinatorTaskDistributor extends TaskDistributor<DynamicTask> {
                     this.taskStatuses.set(data.taskId, taskStatus);
                 }
 
-                this.handleResults([data.result]);
+                this.handleResults([data] as any);
 
                 // Optionally, assign a new task
                 socket.emit('requestTask');
@@ -364,7 +413,13 @@ export class CoordinatorTaskDistributor extends TaskDistributor<DynamicTask> {
                     }
                 });
             });
-        })
+        }
+    }
+    /**
+     * Sets up Socket.IO event handlers to manage worker capabilities and task assignments.
+     */
+    protected setupSockets(): void {
+        super.setupSockets();
     }
 
     /**
@@ -388,6 +443,17 @@ export class CoordinatorTaskDistributor extends TaskDistributor<DynamicTask> {
             this.logger.info(`Task ID: ${result.taskId}, Status: Success, Result: ${JSON.stringify(result)}`);
             // Example: Store results in a database or perform further actions
         });
+        if (this.onResult) {
+            try {
+                this.onResult(results.filter(x => !this.taskStatusHandled.get(x)));
+                for (let i = 0; i < results?.length; i++) {
+                    let d = results[i];
+                    this.taskStatusHandled.set(d.taskId, true);
+                }
+            } catch (e) {
+                console.error(e);
+            }
+        }
     }
 
     /**

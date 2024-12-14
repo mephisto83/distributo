@@ -23,6 +23,7 @@ export default class TaskDistributor<T> {
     private batchSize: number;
     private getTasks: () => T[];
     protected handleResults: (results: T[]) => void;
+    protected onConnected: (socket: Socket) => void;
     private enableBonjour: boolean;
 
     protected logger: winston.Logger;
@@ -30,7 +31,6 @@ export default class TaskDistributor<T> {
     protected server: HTTPServer;
     protected io: SocketIOServer;
     protected tasks: T[];
-
     private bonjourInstance: Bonjour | null = null;
     private servicePublished: Service | null = null;
 
@@ -41,7 +41,7 @@ export default class TaskDistributor<T> {
         this.getTasks = options.getTasks;
         this.handleResults = options.handleResults;
         this.enableBonjour = options.enableBonjour ?? true;
-
+        this.onConnected = (socket: Socket) => { };
         this.logger = winston.createLogger({
             level: 'info',
             format: winston.format.combine(
@@ -67,14 +67,15 @@ export default class TaskDistributor<T> {
         this.app.use(express.json());
         // Additional routes can be defined here
     }
-
+    protected async gooseTasks() { }
     protected setupSockets(): void {
         this.io.on('connection', (socket: Socket) => {
+            this.onConnected(socket);
             this.logger.info(`Worker connected: ${socket.id}`);
-
-            socket.on('requestTasks', () => {
+            socket.on('requestTasks', async () => {
                 // If we don't have any tasks loaded, fetch them now
                 if (this.tasks.length === 0) {
+                    await this.gooseTasks();
                     this.tasks = this.getTasks() || [];
                     this.logger.info(`Loaded ${this.tasks.length} tasks in total.`);
                 }

@@ -1,11 +1,12 @@
 // EnhancedWorkerClient.ts
-
+import path from 'path';
 import { io as ClientIO, Socket } from 'socket.io-client';
 import winston from 'winston';
 import bonjour, { Bonjour, RemoteService } from 'bonjour';
-import { DynamicTask } from './interface.js';
+import { DynamicTask, TaskResult } from './interface.js';
 import { setupDynamicTask } from './setupDynamicTask.js';
 import { executeDynamicTask } from './executeDynamicTask.js';
+import { ensureDirectoryExists } from './utils.js';
 
 interface EnhancedWorkerClientOptions {
     serviceType?: string;
@@ -13,11 +14,7 @@ interface EnhancedWorkerClientOptions {
     taskTypes: string[]; // Types of tasks this worker can handle
     logger?: winston.Logger;
     discoveryTimeoutMs?: number;
-}
-
-interface TaskResult {
-    taskId: string;
-    result: any;
+    workingDirectory?: string;
 }
 
 function createDefaultLogger(): winston.Logger {
@@ -40,7 +37,8 @@ export default class EnhancedWorkerClient {
     private taskTypes: string[];
     private logger: winston.Logger;
     private discoveryTimeoutMs: number;
-
+    private workingDirectory?: string;
+    private promiseTrain: Promise<void>;
     private bonjourInstance: Bonjour | null = null;
     private socket: Socket | null = null;
 
@@ -50,6 +48,8 @@ export default class EnhancedWorkerClient {
         this.taskTypes = options.taskTypes;
         this.logger = options.logger ?? createDefaultLogger();
         this.discoveryTimeoutMs = options.discoveryTimeoutMs ?? 10000;
+        this.workingDirectory = options.workingDirectory;
+        this.promiseTrain = Promise.resolve();
     }
 
     /**
@@ -104,59 +104,76 @@ export default class EnhancedWorkerClient {
      * Connect to the master server via Socket.IO and set up event handlers.
      */
     private async connectToMaster(url: string): Promise<void> {
+        let me = this;
         return new Promise((resolve, reject) => {
             this.logger.info(`Connecting to master at ${url}...`);
             this.socket = ClientIO(url, { reconnectionAttempts: 3 });
 
-            this.socket.on('connect', () => {
-                this.logger.info(`Connected to master at ${url}`);
+            this.socket.on('connect', async () => {
+                this.promiseTrain = this.promiseTrain.then(async () => {
+                    this.logger.info(`Connected to master at ${url}`);
 
-                // Register capabilities
-                this.socket?.emit('registerCapabilities', { taskTypes: this.taskTypes });
+                    // Register capabilities
+                    this.socket?.emit('registerCapabilities', { taskTypes: this.taskTypes });
 
-                // Notify master that worker is ready for these taskTypes
-                this.socket?.emit('notifyReady', { taskTypes: this.taskTypes });
+                    // Notify master that worker is ready for these taskTypes
+                    this.socket?.emit('notifyReady', { taskTypes: this.taskTypes });
 
-                // Request the first task
-                this.socket?.emit('requestTask');
+                    // Request the first task
+                    this.socket?.emit('requestTask');
 
-                resolve();
+                    resolve();
+                });
+                await this.promiseTrain;
             });
 
             this.socket.on('assignTask', async (data: { task: DynamicTask }) => {
-                this.logger.info(`Received task ${data.task.taskId} of type ${data.task.taskType}`);
-                try {
-                    // Setup the task environment
-                    await setupDynamicTask(data.task);
-                    this.logger.info(`Setup completed for task ${data.task.taskId}`);
+                this.promiseTrain = this.promiseTrain.then(async () => {
+                    this.logger.info(`Received task ${data.task.taskId} of type ${data.task.taskType}`);
+                    console.log(`Received task ${data.task.taskId} of type ${data.task.taskType}`);
+                    if (me.workingDirectory) {
+                        ensureDirectoryExists(path.join(me.workingDirectory, data.task.taskType, data.task.type));
+                    }
+                    let task = { ...data.task, workingDirectory: me.workingDirectory ? path.join(me.workingDirectory, data.task.taskType, data.task.type) : '' };
+                    try {
+                        // Setup the task environment
+                        await setupDynamicTask(task);
+                        this.logger.info(`Setup completed for task ${task.taskId}`);
 
-                    // Notify master that installation was successful
-                    this.socket?.emit('installationStatus', { taskId: data.task.taskId, status: 'success' });
+                        // Notify master that installation was successful
+                        this.socket?.emit('installationStatus', { taskId: task.taskId, status: 'success' });
 
-                    // Execute the task
-                    const result = await executeDynamicTask(data.task);
-                    this.logger.info(`Executing task ${data.task.taskId}`);
+                        // Execute the task
+                        const result = await executeDynamicTask(task);
+                        this.logger.info(`Executing task ${task.taskId}`);
 
-                    // Send back the result
-                    const taskResult: TaskResult = {
-                        taskId: data.task.taskId || 'N/A',
-                        result,
-                    };
+                        // Send back the result
+                        const taskResult: TaskResult = {
+                            taskId: task.taskId || 'N/A',
+                            result,
+                        };
 
-                    this.socket?.emit('taskCompleted', { taskId: taskResult.taskId, result: taskResult.result });
-                    this.logger.info(`Task ${taskResult.taskId} completed and results sent to master.`);
-                } catch (error: any) {
-                    this.logger.error(`Error executing task ${data.task.taskId}: ${error.message}`);
-                    // Notify master of task failure
-                    this.socket?.emit('installationStatus', { taskId: data.task.taskId || 'N/A', status: 'failure', error: error.message });
-                    // Optionally, notify master of execution failure
-                    this.socket?.emit('taskCompleted', { taskId: data.task.taskId || 'N/A', result: { error: error.message } });
-                }
+                        this.socket?.emit('taskCompleted', { taskId: taskResult.taskId, result: taskResult.result });
+                        this.logger.info(`Task ${taskResult.taskId} completed and results sent to master.`);
+                    } catch (error: any) {
+                        this.logger.error(`Error executing task ${task.taskId}: ${error.message}`);
+                        // Notify master of task failure
+                        this.socket?.emit('installationStatus', { taskId: task.taskId || 'N/A', status: 'failure', error: error.message });
+                        // Optionally, notify master of execution failure
+                        this.socket?.emit('taskCompleted', { taskId: task.taskId || 'N/A', result: { error: error.message } });
+                    }
+                }).finally(() => {
+                    this.socket?.emit('requestTask');
+                });
+                await this.promiseTrain;
             });
 
             this.socket.on('noTask', (data: { message: string }) => {
                 this.logger.info(`No task received: ${data.message}`);
                 // Optionally, implement a retry mechanism or wait before requesting again
+                setTimeout(() => {
+                    this.socket?.emit('requestTask');
+                }, 10000)
             });
 
             this.socket.on('disconnect', () => {

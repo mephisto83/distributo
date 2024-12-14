@@ -77,3 +77,12 @@ export interface DynamicTask {
      */
     options?: Record<string, any>;
 }
+
+
+export interface TaskResult {
+    taskId: string;
+    result: {
+        [key: string]: any,
+        output: any
+    };
+}

@@ -4,6 +4,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as util from 'util';
 import { DynamicTask } from './interface.js';
+import { isText } from 'istextorbinary';
 import * as ajv from 'ajv';
 
 const readFileAsync = util.promisify(fs.readFile);
@@ -160,19 +161,15 @@ export async function generateDynamicTask(
     const allFiles = await collectFiles(absoluteProjectPath);
 
     // Read all files and construct the files record
-    const filesRecord: Record<string, string> = {};
+    const filesRecord: { [key: string]: string } = {};
 
     for (const relativeFilePath of allFiles) {
         const fullFilePath = path.join(absoluteProjectPath, relativeFilePath);
         const fileBuffer = fs.readFileSync(fullFilePath);
-        const isBinary = /\.(png|jpg|jpeg|gif|svg|ico|pdf)$/.test(fullFilePath);
 
-        let fileContent: string;
-        if (isBinary) {
-            fileContent = fileBuffer.toString('base64'); // Encode binary files
-        } else {
-            fileContent = fileBuffer.toString('utf-8'); // Encode text files
-        }
+        // Use istextorbinary to determine if the file is binary
+        const isBinary = !isText(null, fileBuffer);
+        let fileContent: string = isBinary ? fileBuffer.toString('base64') : fileBuffer.toString('utf-8');
 
         // Normalize file paths to use forward slashes
         const normalizedPath = relativeFilePath.split(path.sep).join('/');
@@ -193,8 +190,12 @@ export async function generateDynamicTask(
     }
 
     // Verify that the entryPoint exists
+
     if (!filesRecord[entryPoint]) {
-        throw new Error(`Entry point file not found: ${entryPoint}`);
+        if (!entryPoint.startsWith("dist")) {
+            console.error(Object.keys(filesRecord));
+            throw new Error(`Entry point file not found: ${entryPoint}`);
+        }
     }
 
     // Assemble the DynamicTask object
