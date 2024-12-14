@@ -22,15 +22,15 @@ export default class TaskDistributor<T> {
     private serviceType: string;
     private batchSize: number;
     private getTasks: () => T[];
-    private handleResults: (results: T[]) => void;
+    protected handleResults: (results: T[]) => void;
+    protected onConnected: (socket: Socket) => void;
     private enableBonjour: boolean;
 
-    private logger: winston.Logger;
-    private app: Express;
-    private server: HTTPServer;
-    private io: SocketIOServer;
-    private tasks: T[];
-
+    protected logger: winston.Logger;
+    protected app: Express;
+    protected server: HTTPServer;
+    protected io: SocketIOServer;
+    protected tasks: T[];
     private bonjourInstance: Bonjour | null = null;
     private servicePublished: Service | null = null;
 
@@ -41,7 +41,7 @@ export default class TaskDistributor<T> {
         this.getTasks = options.getTasks;
         this.handleResults = options.handleResults;
         this.enableBonjour = options.enableBonjour ?? true;
-
+        this.onConnected = (socket: Socket) => { };
         this.logger = winston.createLogger({
             level: 'info',
             format: winston.format.combine(
@@ -67,14 +67,15 @@ export default class TaskDistributor<T> {
         this.app.use(express.json());
         // Additional routes can be defined here
     }
-
-    private setupSockets(): void {
+    protected async gooseTasks() { }
+    protected setupSockets(): void {
         this.io.on('connection', (socket: Socket) => {
+            this.onConnected(socket);
             this.logger.info(`Worker connected: ${socket.id}`);
-
-            socket.on('requestTasks', () => {
+            socket.on('requestTasks', async () => {
                 // If we don't have any tasks loaded, fetch them now
                 if (this.tasks.length === 0) {
+                    await this.gooseTasks();
                     this.tasks = this.getTasks() || [];
                     this.logger.info(`Loaded ${this.tasks.length} tasks in total.`);
                 }
@@ -134,6 +135,24 @@ export default class TaskDistributor<T> {
         this.server.close(() => {
             this.logger.info('Server closed.');
         });
+    }
+
+    /**
+     * Adds a new task to the task queue.
+     * @param task - The task to add.
+     */
+    public addTask(task: T): void {
+        this.tasks.push(task);
+        this.logger.info(`Added new task. Total tasks: ${this.tasks.length}`);
+    }
+
+    /**
+     * Adds multiple tasks to the task queue.
+     * @param tasks - Array of tasks to add.
+     */
+    public addTasks(tasks: T[]): void {
+        this.tasks.push(...tasks);
+        this.logger.info(`Added ${tasks.length} new tasks. Total tasks: ${this.tasks.length}`);
     }
 }
 
