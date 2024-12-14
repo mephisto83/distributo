@@ -14,7 +14,6 @@ interface CoordinatorOptions {
     httpPort?: number; // Port for HTTP server to receive task messages
     taskFolderPath: string; // Base path where project folders are located
     serviceType?: string;
-    batchSize?: number;
     discoveryTimeoutMs?: number;
     enableBonjour?: boolean;
     logger?: winston.Logger;
@@ -26,6 +25,7 @@ interface WorkerInfo {
     socketId: string;
     taskTypes: string[];
     isReady: boolean; // Indicates if the worker has completed setup
+    isRequestPending: boolean;
 }
 
 interface TaskStatus {
@@ -52,7 +52,6 @@ export class CoordinatorTaskDistributor extends TaskDistributor<DynamicTask> {
             httpPort = 5000,
             taskFolderPath,
             serviceType = 'eventbus',
-            batchSize = 5,
             discoveryTimeoutMs = 10000,
             enableBonjour = true,
             logger,
@@ -62,7 +61,7 @@ export class CoordinatorTaskDistributor extends TaskDistributor<DynamicTask> {
         super({
             port: options.port || 4000, // Master server port
             serviceType,
-            batchSize,
+            batchSize: 1,
             getTasks: () => this.getAvailableTasks(),
             handleResults: (results: any[]) => this.handleTaskResults(results),
             enableBonjour,
@@ -276,6 +275,7 @@ export class CoordinatorTaskDistributor extends TaskDistributor<DynamicTask> {
                 socketId: socket.id,
                 taskTypes: [],
                 isReady: false,
+                isRequestPending: false // add this flag
             });
 
             /**
@@ -316,36 +316,51 @@ export class CoordinatorTaskDistributor extends TaskDistributor<DynamicTask> {
              * Description: Workers request a task. Coordinator assigns a suitable task based on worker's capabilities.
              */
             socket.on('requestTask', async () => {
+                const worker = this.workers.get(socket.id);
+                if (!worker) return;
+
+                // If a request is already pending for this worker, ignore the new one.
+                if (worker.isRequestPending) {
+                    return;
+                }
+
+                worker.isRequestPending = true;
+
                 this.promiseTrain = this.promiseTrain.then(async () => {
-                    const worker = this.workers.get(socket.id);
-                    if (!worker || !worker.isReady || worker.taskTypes.length === 0) {
-                        this.logger.warn(`Worker ${socket.id} is not ready or has no capabilities.`);
-                        socket.emit('noTask', { message: 'Worker not ready or has no capabilities.' });
-                        return;
+                    try {
+                        if (!worker || !worker.isReady || worker.taskTypes.length === 0) {
+                            this.logger.warn(`Worker ${socket.id} is not ready or has no capabilities.`);
+                            socket.emit('noTask', { message: 'Worker not ready or has no capabilities.' });
+                            return;
+                        }
+                        if (!this.tasks?.length)
+                            await this.gooseTasks();
+                        // Find a task that matches one of the worker's taskTypes and is pending
+                        const suitableTaskIndex = this.tasks.findIndex(task => worker.taskTypes.includes(task.taskType) && this.taskStatuses.get(task.taskId || '')?.status === 'pending');
+
+                        if (suitableTaskIndex === -1) {
+                            this.logger.info(`No suitable tasks available for worker ${socket.id}.`);
+                            socket.emit('noTask', { message: 'No suitable tasks available.' });
+                            return;
+                        }
+
+                        // Assign the task to the worker
+                        const task = this.tasks.splice(suitableTaskIndex, 1)[0];
+                        socket.emit('assignTask', { task });
+
+                        // Update task status
+                        this.taskStatuses.set(task.taskId || '', {
+                            task,
+                            assignedTo: socket.id,
+                            status: 'installed', // Assume installation is handled by the Worker
+                        });
+
+                        this.logger.info(`Assigned task ${task.taskId} of type ${task.taskType} to worker ${socket.id}.`);
+                    } finally {
+                        // Reset the requestPending flag so the worker can request another task later
+                        worker.isRequestPending = false;
+                        this.workers.set(socket.id, worker);
                     }
-                    if (!this.tasks?.length)
-                        await this.gooseTasks();
-                    // Find a task that matches one of the worker's taskTypes and is pending
-                    const suitableTaskIndex = this.tasks.findIndex(task => worker.taskTypes.includes(task.taskType) && this.taskStatuses.get(task.taskId || '')?.status === 'pending');
-
-                    if (suitableTaskIndex === -1) {
-                        this.logger.info(`No suitable tasks available for worker ${socket.id}.`);
-                        socket.emit('noTask', { message: 'No suitable tasks available.' });
-                        return;
-                    }
-
-                    // Assign the task to the worker
-                    const task = this.tasks.splice(suitableTaskIndex, 1)[0];
-                    socket.emit('assignTask', { task });
-
-                    // Update task status
-                    this.taskStatuses.set(task.taskId || '', {
-                        task,
-                        assignedTo: socket.id,
-                        status: 'installed', // Assume installation is handled by the Worker
-                    });
-
-                    this.logger.info(`Assigned task ${task.taskId} of type ${task.taskType} to worker ${socket.id}.`);
                 });
 
                 await this.promiseTrain;
@@ -366,9 +381,6 @@ export class CoordinatorTaskDistributor extends TaskDistributor<DynamicTask> {
                 }
 
                 this.handleResults([data] as any);
-
-                // Optionally, assign a new task
-                socket.emit('requestTask');
             });
 
             /**

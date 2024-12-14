@@ -100,27 +100,7 @@ export default class EnhancedWorkerClient {
             }, this.discoveryTimeoutMs);
         });
     }
-    private isReconnecting = false;
-    /**
-     * Schedule a reconnection attempt after 20 seconds.
-     */
-    private scheduleReconnect() {
-        // if (this.isReconnecting) return; // Don't schedule if already reconnecting
-        // this.isReconnecting = true;
 
-        // setTimeout(() => {
-        //     this.isReconnecting = false;
-        //     if (this.currentMasterUrl) {
-        //         this.logger.info(`Attempting to reconnect to master at ${this.currentMasterUrl}...`);
-        //         this.connectToMaster(this.currentMasterUrl).catch(err => {
-        //             this.logger.error(`Reconnection attempt failed: ${err.message}`);
-        //             this.scheduleReconnect();
-        //         });
-        //     } else {
-        //         this.logger.warn('No master URL available for reconnection attempt.');
-        //     }
-        // }, 20000);
-    }
     /**
      * Connect to the master server via Socket.IO and set up event handlers.
      */
@@ -204,19 +184,16 @@ export default class EnhancedWorkerClient {
 
                         // Notify master that worker is ready for these taskTypes
                         this.socket?.emit('notifyReady', { taskTypes: this.taskTypes });
-                        this.socket?.emit('requestTask');
                     }
                 }, 10000)
             });
 
             this.socket.on('disconnect', () => {
                 this.logger.warn('Disconnected from master.');
-                this.scheduleReconnect();
             });
 
             this.socket.on('connect_error', (err: Error) => {
                 this.logger.error(`Connection error: ${err.message}`);
-                this.scheduleReconnect();
                 reject(false);
             });
         });
