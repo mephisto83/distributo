@@ -447,7 +447,7 @@ export class CoordinatorTaskDistributor extends TaskDistributor<DynamicTask> {
             try {
                 this.onResult(results.filter(x => !this.taskStatusHandled.get(x)));
                 for (let i = 0; i < results?.length; i++) {
-                    let d = results[i];
+                    let d: TaskResult = results[i];
                     this.taskStatusHandled.set(d.taskId, true);
                 }
             } catch (e) {

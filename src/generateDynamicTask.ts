@@ -193,7 +193,6 @@ export async function generateDynamicTask(
 
     if (!filesRecord[entryPoint]) {
         if (!entryPoint.startsWith("dist")) {
-            console.error(Object.keys(filesRecord));
             throw new Error(`Entry point file not found: ${entryPoint}`);
         }
     }
