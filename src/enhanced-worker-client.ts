@@ -184,6 +184,7 @@ export default class EnhancedWorkerClient {
 
                         // Notify master that worker is ready for these taskTypes
                         this.socket?.emit('notifyReady', { taskTypes: this.taskTypes });
+                        this.socket?.emit('requestTask');
                     }
                 }, 10000)
             });
