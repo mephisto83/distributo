@@ -39,6 +39,7 @@ export default class EnhancedWorkerClient {
     private logger: winston.Logger;
     private discoveryTimeoutMs: number;
     private workingDirectory?: string;
+    private hasRequested: any;
     private promiseTrain: Promise<void>;
     private bonjourInstance: Bonjour | null = null;
     private socket: Socket | null = null;
@@ -107,6 +108,15 @@ export default class EnhancedWorkerClient {
     private async connectToMaster(url: string): Promise<void> {
         let me = this;
         this.promiseTrain = Promise.resolve();
+        let isBusy = false;
+        if (this.hasRequested) {
+            clearInterval(this.hasRequested);
+        }
+        this.hasRequested = setInterval(() => {
+            if (!isBusy && this.socket) {
+                this.socket?.emit('requestTask');
+            }
+        }, 20000)
         return new Promise((resolve, reject) => {
             this.logger.info(`Connecting to master at ${url}...`);
             this.socket = ClientIO(url, {
@@ -135,6 +145,7 @@ export default class EnhancedWorkerClient {
 
             this.socket.on('assignTask', async (data: { task: DynamicTask }) => {
                 this.promiseTrain = this.promiseTrain.then(async () => {
+                    isBusy = true;
                     this.logger.info(`Received task ${data.task.taskId} of type ${data.task.taskType}`);
                     console.log(`Received task ${data.task.taskId} of type ${data.task.taskType}`);
                     if (me.workingDirectory) {
@@ -169,6 +180,7 @@ export default class EnhancedWorkerClient {
                         this.socket?.emit('taskCompleted', { taskId: task.taskId || 'N/A', result: { error: error.message } });
                     }
                 }).finally(() => {
+                    isBusy = false;
                     this.socket?.emit('requestTask');
                 });
                 await this.promiseTrain;
