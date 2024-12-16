@@ -333,14 +333,15 @@ export class CoordinatorTaskDistributor extends TaskDistributor<DynamicTask> {
                             socket.emit('noTask', { message: 'Worker not ready or has no capabilities.' });
                             return;
                         }
-                        if (!this.tasks?.length)
-                            await this.gooseTasks();
                         // Find a task that matches one of the worker's taskTypes and is pending
-                        const suitableTaskIndex = this.tasks.findIndex(task => worker.taskTypes.includes(task.taskType) && this.taskStatuses.get(task.taskId || '')?.status === 'pending');
-
+                        const suitableTaskIndex = this.tasks.findIndex(task =>
+                            (worker.taskTypes.includes('*') || worker.taskTypes.includes(task.taskType)) &&
+                            this.taskStatuses.get(task.taskId || '')?.status === 'pending');
+                        console.log(worker.taskTypes)
                         if (suitableTaskIndex === -1) {
                             this.logger.info(`No suitable tasks available for worker ${socket.id}.`);
                             socket.emit('noTask', { message: 'No suitable tasks available.' });
+                            await this.gooseTasks();
                             return;
                         }
 
@@ -371,7 +372,7 @@ export class CoordinatorTaskDistributor extends TaskDistributor<DynamicTask> {
              * Payload: { taskId: string, result: any }
              * Description: Workers send this event upon completing a task.
              */
-            socket.on('taskCompleted', (data: TaskResult) => {
+            socket.on('taskCompleted', async (data: TaskResult) => {
                 this.logger.info(`Worker ${socket.id} completed task ${data.taskId}.`);
 
                 const taskStatus = this.taskStatuses.get(data.taskId);
@@ -381,6 +382,7 @@ export class CoordinatorTaskDistributor extends TaskDistributor<DynamicTask> {
                 }
 
                 this.handleResults([data] as any);
+                await this.gooseTasks();
             });
 
             /**
