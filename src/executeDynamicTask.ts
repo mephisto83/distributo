@@ -80,7 +80,6 @@ export async function executeDynamicTask(task: DynamicTask): Promise<any> {
         waitResolve = resolve;
     })
     eventEmitter.on('result', (data: any) => {
-        console.log('result received');
         output = data;
         waitResolve(output)
     })
