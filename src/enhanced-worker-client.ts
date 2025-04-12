@@ -59,7 +59,9 @@ export default class EnhancedWorkerClient {
      */
     public async start(): Promise<void> {
         try {
-            this.currentMasterUrl = this.masterUrl ?? await this.discoverMaster();
+            do {
+                this.currentMasterUrl = this.masterUrl ?? await this.discoverMaster();
+            } while (!this.currentMasterUrl);
             await this.connectToMaster(this.currentMasterUrl);
         } catch (err: any) {
             this.logger.error(`Could not start worker: ${err.message}`);

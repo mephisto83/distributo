@@ -39,6 +39,7 @@ export class CoordinatorTaskDistributor extends TaskDistributor<DynamicTask> {
     private httpPort: number;
     private taskFolderPath: string;
     private taskGenerator?: () => Promise<DynamicTask[]>;
+    private taskToFetch: number;
 
     private promiseTrain: Promise<void>;
     // Mapping of worker socket IDs to their capabilities and status
@@ -66,7 +67,7 @@ export class CoordinatorTaskDistributor extends TaskDistributor<DynamicTask> {
             handleResults: (results: any[]) => this.handleTaskResults(results),
             enableBonjour,
         });
-
+        this.taskToFetch = 10;
         this.promiseTrain = Promise.resolve();
         this.taskGenerator = options.taskGenerator;
 
@@ -102,16 +103,18 @@ export class CoordinatorTaskDistributor extends TaskDistributor<DynamicTask> {
         console.log('Goose the task list')
         if (this.taskGenerator) {
             console.log('getting new tasks')
-            let newTasks = await this.taskGenerator();
-            if (newTasks?.length) {
-                this.tasks.push(...newTasks);
-                for (let dynamicTask of newTasks) {
-                    // Initialize task status with dynamicTask instead of undefined task
-                    this.taskStatuses.set(dynamicTask.taskId || '', {
-                        task: dynamicTask,
-                        assignedTo: '',
-                        status: 'pending',
-                    });
+            for (let i = 0; i < this.taskToFetch; i++) {
+                let newTasks = await this.taskGenerator();
+                if (newTasks?.length) {
+                    this.tasks.push(...newTasks);
+                    for (let dynamicTask of newTasks) {
+                        // Initialize task status with dynamicTask instead of undefined task
+                        this.taskStatuses.set(dynamicTask.taskId || '', {
+                            task: dynamicTask,
+                            assignedTo: '',
+                            status: 'pending',
+                        });
+                    }
                 }
             }
         }
