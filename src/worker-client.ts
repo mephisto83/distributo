@@ -92,6 +92,11 @@ export default class WorkerClient<TaskType = unknown, ResultType = unknown> {
         });
     }
 
+    public async requestTask(): Promise<void> {
+        if (this.socket) {
+            this.socket?.emit('requestTasks');
+        }
+    }
     /**
      * Connect to the master server via Socket.IO and set up event handlers.
      */
