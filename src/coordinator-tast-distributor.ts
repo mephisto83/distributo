@@ -64,7 +64,7 @@ export class CoordinatorTaskDistributor extends TaskDistributor<DynamicTask> {
             serviceType,
             batchSize: 1,
             getTasks: () => this.getAvailableTasks(),
-            handleResults: (results: any[]) => this.handleTaskResults(results),
+            handleResults: async (results: any[]) => this.handleTaskResults(results),
             enableBonjour,
         });
         this.taskToFetch = 10;

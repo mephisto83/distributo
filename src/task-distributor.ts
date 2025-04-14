@@ -13,7 +13,7 @@ export interface TaskDistributorOptions<T> {
     serviceType?: string;
     batchSize?: number;
     getTasks: () => T[];                 // Function to fetch an array of tasks
-    handleResults: (results: T[]) => void; // Function called with completed tasks
+    handleResults: (results: T[]) => Promise<void>; // Function called with completed tasks
     enableBonjour?: boolean;
 }
 
@@ -22,7 +22,7 @@ export default class TaskDistributor<T> {
     private serviceType: string;
     private batchSize: number;
     private getTasks: () => T[];
-    protected handleResults: (results: T[]) => void;
+    protected handleResults: (results: T[]) => Promise<void>;
     protected onConnected: (socket: Socket) => void;
     private enableBonjour: boolean;
 
@@ -91,9 +91,9 @@ export default class TaskDistributor<T> {
                 this.logger.info(`Provided ${batch.length} tasks to worker ${socket.id}. Remaining: ${this.tasks.length}`);
             });
 
-            socket.on('taskResults', (data: { results: T[] }) => {
+            socket.on('taskResults', async (data: { results: T[] }) => {
                 if (data && Array.isArray(data.results)) {
-                    this.handleResults(data.results);
+                    await this.handleResults(data.results);
                     this.logger.info(`Received results for ${data.results.length} tasks from ${socket.id}.`);
                 }
             });
